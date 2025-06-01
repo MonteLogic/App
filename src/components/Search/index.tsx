@@ -1,5 +1,9 @@
-import {useIsFocused, useNavigation} from '@react-navigation/native';
+import {StackActions, useIsFocused, useNavigation, useRoute} from '@react-navigation/native';
+import type {RouteProp} from '@react-navigation/native';
+// Also add this for better typing
+// Somewhere near other type imports, if not already there for navigation
 import type {ContentStyle} from '@shopify/flash-list';
+// Or the correct path if it's different
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {NativeScrollEvent, NativeSyntheticEvent, ViewToken} from 'react-native';
 import {View} from 'react-native';
@@ -46,6 +50,7 @@ import EmptySearchView from '@pages/Search/EmptySearchView';
 import CONST from '@src/CONST';
 import ONYXKEYS from '@src/ONYXKEYS';
 import ROUTES from '@src/ROUTES';
+import SCREENS from '@src/SCREENS';
 import type {ReportAction} from '@src/types/onyx';
 import type SearchResults from '@src/types/onyx/SearchResults';
 import {useSearchContext} from './SearchContext';
@@ -141,6 +146,9 @@ function Search({queryJSON, currentSearchResults, lastNonEmptySearchResults, onS
     // eslint-disable-next-line rulesdir/prefer-shouldUseNarrowLayout-instead-of-isSmallScreenWidth
     const {isSmallScreenWidth, isLargeScreenWidth} = useResponsiveLayout();
     const navigation = useNavigation<PlatformStackNavigationProp<SearchFullscreenNavigatorParamList>>();
+    // ADD THIS LINE (replace 'YOUR_ACTUAL_SEARCH_SCREEN_NAME' with the real screen name):
+    const route = useRoute<RouteProp<SearchFullscreenNavigatorParamList, typeof SCREENS.SEARCH.ROOT>>();
+
     const isFocused = useIsFocused();
     const {
         setCurrentSearchHash,
@@ -352,6 +360,65 @@ function Search({queryJSON, currentSearchResults, lastNonEmptySearchResults, onS
             setExportMode(false);
         }
     }, [isFocused, data, searchResults?.search?.hasMoreResults, selectedTransactions, setExportMode, setShouldShowExportModeOption, shouldGroupByReports]);
+    // Place this useEffect inside your Search functional component,
+    // after all other top-level hook calls (useState, useOnyx, other useEffects, etc.)
+    // but before any early return statements or the main component return.
+
+    useEffect(() => {
+        // Destructure sortOrder (and potentially other parameters you want to check) from queryJSON.
+        // Renaming sortOrder here to avoid confusion if queryJSON itself is modified directly later,
+        // though we are using a correctedQueryJSON copy.
+        const {sortOrder: currentSortOrderInQueryJSON} = queryJSON;
+        let needsCorrection = false;
+
+        // Create a mutable copy of queryJSON to hold potential corrections.
+        const correctedQueryJSON: SearchQueryJSON = {...queryJSON};
+
+        // --- Parameter Correction Logic ---
+        // Check if sortOrder is a string and ends with one or more literal '%' characters.
+        if (typeof currentSortOrderInQueryJSON === 'string' && /%+$/.test(currentSortOrderInQueryJSON)) {
+            Log.info(`[Search] Malformed sortOrder detected in queryJSON: "${currentSortOrderInQueryJSON}"`);
+            // Remove all trailing '%' characters.
+            correctedQueryJSON.sortOrder = currentSortOrderInQueryJSON.replace(/%+$/, '') as SortOrder;
+            Log.info(`[Search] Corrected sortOrder to: "${correctedQueryJSON.sortOrder}"`);
+            needsCorrection = true;
+        }
+
+        // FUTURE: You could add similar checks for other string parameters in queryJSON
+        // if they are also susceptible to this "%%%" suffix issue. For example:
+        // if (typeof correctedQueryJSON.status === 'string' && /%+$/.test(correctedQueryJSON.status)) {
+        //     Log.info(`[Search] Malformed status detected: "${correctedQueryJSON.status}"`);
+        //     correctedQueryJSON.status = correctedQueryJSON.status.replace(/%+$/, '');
+        //     Log.info(`[Search] Corrected status to: "${correctedQueryJSON.status}"`);
+        //     needsCorrection = true;
+        // }
+        // --- End of Parameter Correction Logic ---
+
+        // If any parameter was corrected, proceed to update the URL.
+        // Inside your useEffect for URL correction:
+        if (needsCorrection) {
+            const newQueryString = buildSearchQueryString(correctedQueryJSON);
+            const currentRawQueryString = (route.params as {q?: string})?.q;
+
+            if (newQueryString !== currentRawQueryString) {
+                Log.info(
+                    `[Search] Dispatching REPLACE action for screen <span class="math-inline">\{SCREENS\.SEARCH\.ROOT\}\. Old raw q\: "</span>{currentRawQueryString ?? 'undefined'}", New q: "${newQueryString}"`,
+                );
+
+                // Use navigation.dispatch with StackActions.replace:
+                navigation.dispatch(
+                    StackActions.replace(SCREENS.SEARCH.ROOT, {
+                        // Target screen name
+                        q: newQueryString, // Params for the target screen
+                    }),
+                );
+            } else {
+                Log.info(`[Search] Correction applied, but newQueryString is identical to currentRawQueryString ("${currentRawQueryString ?? 'undefined'}"). No navigation needed.`);
+            }
+        }
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [queryJSON, navigation, route.params]); // Dependencies for the useEffect hook.
 
     const toggleTransaction = useCallback(
         (item: SearchListItem) => {
